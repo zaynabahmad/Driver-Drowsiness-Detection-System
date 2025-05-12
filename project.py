@@ -57,7 +57,15 @@ RIGHT_EYE = [362, 385, 387, 263, 373, 380]
 
 pygame.mixer.init()
 warning_sound = pygame.mixer.Sound('mixkit-confirmation-tone-2867.wav')
-alert_sound = pygame.mixer.Sound('mixkit-urgent-simple-tone-loop-2976.wav')
+alert_sound = pygame.mixer.Sound('Ya marary .mp3')
+
+
+dark_pixel_threshold = 30     
+dark_pixel_count_limit = 2000  
+dark_frame_moments = 0
+
+
+
 
 # ===== Eye Aspect Ratio Calculation =====
 def eye_aspect_ratio(eye_landmarks):
@@ -94,13 +102,16 @@ WARNING_TIME = 3
 ALERT_TIME = 5
 
 # ===== Interactive UI Setup =====
-def draw_text(frame, text, position, color=(255, 0, 0), font=cv2.FONT_HERSHEY_SIMPLEX, size=1, thickness=2):
-    cv2.putText(frame, text, position, font, size, color, thickness)
+# def draw_text(frame, text, position, color=(255, 0, 0), font=cv2.FONT_HERSHEY_SIMPLEX, size=1, thickness=2):
+#     cv2.putText(frame, text, position, font, size, color, thickness)
 
-def draw_button(frame, text, position, width=200, height=50, color=(0, 255, 0)):
-    cv2.rectangle(frame, position, (position[0] + width, position[1] + height), color, -1)
-    draw_text(frame, text, (position[0] + 50, position[1] + 30), color=(0, 0, 0))
+# def draw_button(frame, text, position, width=200, height=50, color=(0, 255, 0)):
+#     cv2.rectangle(frame, position, (position[0] + width, position[1] + height), color, -1)
+#     draw_text(frame, text, (position[0] + 50, position[1] + 30), color=(0, 0, 0))
 
+
+total_dark_pixels = 0
+frame_count = 0
 
 # ===== Main Loop =====
 while cap.isOpened():
@@ -111,7 +122,39 @@ while cap.isOpened():
 
     # ========== Preprocessing ==========
     frame = cv2.flip(frame, 1)
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    dark_pixels = np.sum(gray < dark_pixel_threshold)
+
+    if dark_pixels > dark_pixel_count_limit:
+        dark_frame_moments += 1
+
+    total_dark_pixels += dark_pixels
+    frame_count += 1
+
+    if dark_pixels > dark_pixel_count_limit:
+            dark_frame_moments += 1
+
+            # Show visual warning on frame
+            cv2.putText(frame, "DARK AREA DETECTED!", (50, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+
+            # # Play a sound alert if not already playing
+            # if not pygame.mixer.Channel(1).get_busy():
+            #     pygame.mixer.Channel(1).play(pygame.mixer.Sound('dark_alert.wav'))  # Make sure this sound exists
+
+    else:
+        dark_frame_moments = 0  # Reset if lighting improves
+
+    
+
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Convert to YUV and apply CLAHE on luminance
+    yuv = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2YUV)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    yuv[:, :, 0] = clahe.apply(yuv[:, :, 0])
+    rgb_frame = cv2.cvtColor(yuv, cv2.COLOR_YUV2RGB)
+
     rgb_frame = cv2.GaussianBlur(rgb_frame, (5, 5), 0)
 
     results = face_mesh.process(rgb_frame)
@@ -206,6 +249,8 @@ while cap.isOpened():
             y_min, y_max = min(y_coords), max(y_coords)
             cv2.rectangle(frame, (x_min - 10, y_min - 10), (x_max + 10, y_max + 10), (0, 255, 0), 2)
 
+
+
         # Face rectangle
         all_points = [(int(lm.x * w), int(lm.y * h)) for lm in face_landmarks.landmark]
         x_coords = [pt[0] for pt in all_points]
@@ -223,13 +268,26 @@ while cap.isOpened():
         cv2.putText(frame, "Driver Detected", (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
 
     # ========== Display ==========
-    screen_width = 1920
-    screen_height = 1080
-    frame = cv2.resize(frame, (screen_width, screen_height))
+    screen_width = 1000
+    screen_height = 750
+
+    # frame = cv2.resize(frame, (screen_width, screen_height))
 
     cv2.namedWindow('Driver Monitoring', cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty('Driver Monitoring', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    cv2.setWindowProperty('Driver Monitoring', screen_width, screen_height)
     cv2.imshow('Driver Monitoring', frame)
+
+
+    hist = cv2.calcHist([cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)], [0], None, [256], [0, 256])
+    hist_img = np.zeros((300, 256, 3), dtype=np.uint8)
+    cv2.normalize(hist, hist, 0, 300, cv2.NORM_MINMAX)
+    
+
+    for x, y in enumerate(hist):
+        cv2.line(hist_img, (x, 300), (x, 300 - int(y)), (255, 255, 255))
+
+    cv2.imshow("Histogram", hist_img)
+
 
     if cv2.waitKey(5) & 0xFF == 27:
         break
@@ -238,6 +296,12 @@ while cap.isOpened():
 cap.release()
 csv_file.close()
 print(f"Total Sleep Time During Session: {round(total_sleep_time, 2)} seconds.")
+print(f"\nTotal very dark moments detected: {dark_frame_moments}")
+
+if frame_count > 0:
+    avg_dark_pixels = total_dark_pixels / frame_count
+    print(f"Average number of dark pixels per frame: {avg_dark_pixels:.2f}")
+
 
 # ===== Plotting Sleep Analysis =====
 if sleep_periods:
